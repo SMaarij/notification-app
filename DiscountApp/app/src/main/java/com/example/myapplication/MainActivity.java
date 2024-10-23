@@ -4,25 +4,29 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
-import android.content.Intent;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.StrictMode;
 import android.widget.Button;
 import android.widget.Toast;
+
 import org.json.JSONObject;
+
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.util.HashMap;
+import java.util.AbstractMap;
+import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
 
 public class MainActivity extends AppCompatActivity {
 
     private RecyclerView recyclerView;
-    private com.example.myapplication.DiscountAdapter discountAdapter;
-    private HashMap<String, String> discounts = new HashMap<>();
+    private DiscountAdapter discountAdapter;
+    private List<Map.Entry<String, String>> discountList = new ArrayList<>(); // List to hold discount entries
     private Handler handler = new Handler();
     private final int REFRESH_INTERVAL = 30000; // 30 seconds refresh interval
     private boolean isFetching = false;  // Track whether fetching is ongoing
@@ -69,8 +73,6 @@ public class MainActivity extends AppCompatActivity {
         }
     };
 
-
-
     private void fetchDiscounts() {
         try {
             // Replace with your JSONBin URL
@@ -95,39 +97,28 @@ public class MainActivity extends AppCompatActivity {
             JSONObject jsonObject = new JSONObject(String.valueOf(response));
             JSONObject record = jsonObject.getJSONObject("record");
 
-            discounts.clear();
+            discountList.clear(); // Clear previous discounts
             Iterator<String> keys = record.keys();
 
             while (keys.hasNext()) {
                 String brand = keys.next();
                 String offers = record.getString(brand);
-                discounts.put(brand, offers);  // Add the parsed data to the HashMap
+                discountList.add(new AbstractMap.SimpleEntry<>(brand, offers));  // Add to the list as entries
             }
 
-
-
-// Now set the adapter with the parsed data
-            discountAdapter = new DiscountAdapter(this, discounts);
-            recyclerView.setAdapter(discountAdapter);
-            recyclerView = findViewById(R.id.recyclerView); // Make sure this matches the ID in your layout XML
-            recyclerView.setLayoutManager(new LinearLayoutManager(this));
-
+            // Set the adapter with the parsed data
             if (discountAdapter == null) {
-                discountAdapter = new DiscountAdapter(this, discounts);
+                discountAdapter = new DiscountAdapter(this, discountList);  // Initialize the adapter with the list
                 recyclerView.setAdapter(discountAdapter);
             } else {
                 discountAdapter.notifyDataSetChanged();  // Notify the adapter of data changes
             }
-
-
-
 
         } catch (Exception e) {
             e.printStackTrace();
             Toast.makeText(this, "Error fetching data", Toast.LENGTH_SHORT).show();
         }
     }
-
 
     @Override
     protected void onDestroy() {
