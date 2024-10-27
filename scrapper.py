@@ -1,25 +1,19 @@
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, WebDriverException, StaleElementReferenceException, NoSuchElementException
-from bs4 import BeautifulSoup
-import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import time
-from urllib.parse import urlparse, urljoin
 import logging
+import aiohttp
 import asyncio
 import requests
 import json
-import aiohttp
+import re
+from urllib.parse import urlparse, urljoin
+from bs4 import BeautifulSoup
+import time
 
+# Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 chrome_driver_path = "C:\\Users\\NEDUET\\Desktop\\notification-app\\chromedriver-win64\\chromedriver-win64\\chromedriver.exe"
 
+# Brand URLs
 brand_urls = {
     "Junaid Jamshed": "https://www.junaidjamshed.com/",
     "Diners": "https://diners.com.pk",
@@ -29,17 +23,6 @@ brand_urls = {
     "Gul Ahmed": "https://www.gulahmedshop.com/",
     "Bonanza Satrangi": "https://bonanzasatrangi.com/"
 }
-
-def setup_driver():
-    options = Options()
-    options.add_argument("--headless")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-    options.add_argument("--disable-javascript")  # Disable JavaScript for faster loading
-    service = Service(chrome_driver_path)
-    return webdriver.Chrome(service=service, options=options)
 
 def extract_discounts_and_products(text):
     product_keywords = r"(jeans|shirts|kurta|trousers|dresses|tops|pants|shoes|bags|jackets|accessories|sale|collection)"
@@ -112,6 +95,29 @@ async def scrape_page(session, url):
         logging.error(f"Error scraping {url}: {e}")
     return set()
 
+async def scrape_brand_logo(session, url):
+    try:
+        async with session.get(url) as response:
+            if response.status == 200:
+                text = await response.text()
+                soup = BeautifulSoup(text, 'html.parser')
+                
+                # Look for the logo image
+                logo_img = soup.find('img', alt=lambda x: x and 'logo' in x.lower())
+                if logo_img and 'src' in logo_img.attrs:
+                    return logo_img['src']
+                
+                # If not found, look for specific keywords in img src
+                for img in soup.find_all('img'):
+                    src = img.get('src', '')
+                    if any(kw in src.lower() for kw in ['logo', 'brand']):
+                        return urljoin(url, src)
+
+    except Exception as e:
+        logging.error(f"Error scraping brand logo from {url}: {e}")
+    
+    return None  # Return None if logo is not found
+
 async def scrape_website(brand, url):
     logging.info(f"Starting to scrape {brand}...")
     all_discounts_and_products = set()
@@ -119,6 +125,7 @@ async def scrape_website(brand, url):
     to_visit = {url}
     max_pages = 100
     timeout = time.time() + 300  # 5 minutes timeout
+    brand_image_url = f"https://example.com/images/{brand.lower().replace(' ', '_')}_logo.png"  # Default logo URL
 
     async with aiohttp.ClientSession() as session:
         while to_visit and len(visited_urls) < max_pages and time.time() < timeout:
@@ -130,15 +137,25 @@ async def scrape_website(brand, url):
                 discounts_and_products = await scrape_page(session, current_url)
                 all_discounts_and_products.update(discounts_and_products)
 
+                # Scrape the brand logo
+                logo_url = await scrape_brand_logo(session, current_url)
+                if logo_url:
+                    brand_image_url = logo_url  # Update logo URL if found
+
                 new_links = await get_internal_links(session, current_url)
                 to_visit.update(new_links - visited_urls)
 
-    return brand, ', '.join(all_discounts_and_products) if all_discounts_and_products else "No discount offers found."
+    return {
+        "brand": brand,
+        "discounts": ', '.join(all_discounts_and_products) if all_discounts_and_products else "No discount offers found.",
+        "imageUrl": brand_image_url  # Include the logo image URL here
+    }
 
 async def main_async():
     tasks = [scrape_website(brand, url) for brand, url in brand_urls.items()]
     results = await asyncio.gather(*tasks)
-    return dict(results)
+    # Return results as a list of dictionaries
+    return results
 
 def update_jsonbin(data):
     # Replace with your actual bin ID and master key
@@ -151,24 +168,34 @@ def update_jsonbin(data):
     response = requests.put(url, headers=headers, data=json.dumps(data))
     
     if response.status_code != 200:
-       print(f"Error updating bin: {response.json().get('message')}")
+        print(f"Error updating bin: {response.json().get('message')}")
     
     if response.status_code == 200:
         print("Successfully updated JSONBin.")
     else:
         print(f"Failed to update JSONBin. Status code: {response.status_code}, Message: {response.json().get('message')}")
 
-
 def main():
-    
     all_discounts = asyncio.run(main_async())
 
-    for brand, discounts in all_discounts.items():
-        logging.info(f"{brand} Discount offers: {discounts}")
+    # Create a dictionary to hold brand information
+    all_discounts_dict = {}
+    
+    for result in all_discounts:
+        brand = result['brand']
+        discounts = result['discounts']
+        image_url = result['imageUrl']
         
-    update_jsonbin(discounts)
-        
-    return all_discounts,update_jsonbin(discounts)
+        # Store in the dictionary
+        all_discounts_dict[brand] = {
+            "discounts": discounts,
+            "imageUrl": image_url
+        }
 
+        logging.info(f"{brand} Discount offers: {discounts} | Logo URL: {image_url}")
+
+    update_jsonbin(all_discounts_dict)
+    
+    return all_discounts_dict
 if __name__ == "__main__":
     main()
